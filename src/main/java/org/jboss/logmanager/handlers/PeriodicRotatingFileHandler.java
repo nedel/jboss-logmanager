@@ -25,9 +25,18 @@ import java.util.Date;
 import java.util.Calendar;
 import java.util.TimeZone;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.FilenameFilter;
+import java.io.IOException;
+import java.nio.channels.Channels;
+import java.nio.channels.WritableByteChannel;
 
 import java.util.logging.ErrorManager;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.zip.GZIPOutputStream;
 
 /**
  * A file handler which rotates the log at a preset time interval.  The interval is determined by the content of the
@@ -177,7 +186,59 @@ public class PeriodicRotatingFileHandler extends FileHandler {
             // first, close the original file (some OSes won't let you move/rename a file that is open)
             setFile(null);
             // next, rotate it
-            file.renameTo(new File(file.getAbsolutePath() + nextSuffix));
+            File newFile=new File(file.getAbsolutePath() + nextSuffix);
+            file.renameTo(newFile);
+            //compress action here
+
+            byte[] buffer = new byte[1024];
+            File zipFile = new File(newFile.getAbsolutePath() + ".gz");
+            try (GZIPOutputStream gzipos = new GZIPOutputStream(new FileOutputStream(zipFile));) {
+                //compress log file
+                try (FileInputStream in = new FileInputStream(newFile);) {
+                    int len;
+                    while ((len = in.read(buffer)) > 0) {
+                        gzipos.write(buffer, 0, len);
+                    }
+                }
+                //delete gzip log files older then 10 days
+                Calendar cal = Calendar.getInstance();
+                cal.add(Calendar.DAY_OF_YEAR, -10);
+
+                File logFolder = newFile.getParentFile();
+                File[] listFiles = logFolder.listFiles(new FilenameFilter() {
+
+                    @Override
+                    public boolean accept(File dir, String name) {
+                        if (name.startsWith(file.getName()) && name
+                                .endsWith(".gz")) {
+                            return true;
+                        }
+                        
+                        return false;
+                    }
+                });
+
+                for (File oldLogFiles : listFiles) {
+                    //extract date
+                    String date = oldLogFiles.getName()
+                            .replace(file.getName(), "")
+                            .replace(".gz", "")
+                            .trim();
+                    //parse date of log old log file
+                    Date logDate = format.parse(date);
+
+                    if (logDate.before(cal.getTime())) {
+                        oldLogFiles.delete();
+                    }
+                }
+
+                newFile.delete();
+            } catch (Exception ex) {
+                reportError("Unable to compress log file", ex, ErrorManager.OPEN_FAILURE);
+            }
+
+            buffer = null;
+
             // start new file
             setFile(file);
         } catch (FileNotFoundException e) {
